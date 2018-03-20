@@ -64,10 +64,6 @@ class Youtube
         $this->client = $this->setup($client);
 
         $this->youtube = new \Google_Service_YouTube($this->client);
-
-        if ($accessToken = $this->getLatestAccessTokenFromDB()) {
-            $this->client->setAccessToken($accessToken);
-        }
     }
 
     /**
@@ -78,13 +74,13 @@ class Youtube
      * @param  string $privacyStatus
      * @return string
      */
-    public function upload($path, array $data = [], $privacyStatus = 'public')
+    public function upload($path, array $data = [], $privacyStatus = 'public', $userId)
     {
         if(!file_exists($path)) {
             throw new Exception('Video file does not exist at path: "'. $path .'". Provide a full path to the file before attempting to upload.');
         }
 
-        $this->handleAccessToken();
+        $this->handleAccessToken($userId);
 
         try {
             // Setup the Snippet
@@ -211,9 +207,9 @@ class Youtube
      *
      * @return bool
      */
-    public function delete($id)
+    public function delete($id, $userId)
     {
-        $this->handleAccessToken();
+        $this->handleAccessToken($userId);
 
         if (!$this->exists($id)) {
             throw new Exception('A video matching id "'. $id .'" could not be found.');
@@ -229,9 +225,9 @@ class Youtube
      *
      * @return bool
      */
-    public function exists($id)
+    public function exists($id, $userId)
     {
-        $this->handleAccessToken();
+        $this->handleAccessToken($userId);
 
         $response = $this->youtube->videos->listVideos('status', ['id' => $id]);
 
@@ -304,9 +300,10 @@ class Youtube
      *
      * @param  string  $accessToken
      */
-    public function saveAccessTokenToDB($accessToken)
+    public function saveAccessTokenToDB($accessToken, $userId)
     {
         return DB::table('youtube_access_tokens')->insert([
+            'user_id' => $userId,
             'access_token' => json_encode($accessToken),
             'created_at'   => Carbon::createFromTimestamp($accessToken['created'])
         ]);
@@ -317,10 +314,11 @@ class Youtube
      *
      * @return string
      */
-    public function getLatestAccessTokenFromDB()
+    public function getLatestAccessTokenFromDB($userId)
     {
         $latest = DB::table('youtube_access_tokens')
                     ->latest('created_at')
+                    ->where('user_id', $userId)
                     ->first();
 
         return $latest ? (is_array($latest) ? $latest['access_token'] : $latest->access_token ) : null;
@@ -331,10 +329,15 @@ class Youtube
      *
      * @return void
      */
-    public function handleAccessToken()
+    public function handleAccessToken($userId)
     {
         if (is_null($accessToken = $this->client->getAccessToken())) {
-            throw new \Exception('An access token is required.');
+            if ($accessToken = $this->getLatestAccessTokenFromDB($userId)) {
+                $this->client->setAccessToken($accessToken);
+            }
+            if (is_null($accessToken = $this->client->getAccessToken())) {
+                throw new \Exception('An access token is required.');
+            }
         }
 
         if($this->client->isAccessTokenExpired())
@@ -346,7 +349,7 @@ class Youtube
                 $this->client->refreshToken($accessToken['refresh_token']);
 
                 // Save the access token
-                $this->saveAccessTokenToDB($this->client->getAccessToken());
+                $this->saveAccessTokenToDB($this->client->getAccessToken(), $userId);
             }
         }
     }
